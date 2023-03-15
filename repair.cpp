@@ -44,15 +44,20 @@ std::vector<DriverPackage> getDriverPackages() {
     std::string line;
     DriverPackage currentDriverPackage;
     while (std::getline(input, line)) {
-        if (line.find("Published name : ") != std::string::npos) {
-            currentDriverPackage.publishedName = line.substr(18);
-        } else if (line.find("Driver name    : ") != std::string::npos) {
-            currentDriverPackage.driverName = line.substr(18);
+        if (line.find("Published name :") != std::string::npos) {
+            size_t startPos = line.find(":") + 1;
+            currentDriverPackage.publishedName = line.substr(startPos);
+            currentDriverPackage.publishedName.erase(0, currentDriverPackage.publishedName.find_first_not_of(" \t\n\r\f\v")); // Remove leading whitespaces
+        } else if (line.find("Driver package provider :") != std::string::npos) {
+            size_t startPos = line.find(":") + 1;
+            currentDriverPackage.driverName = line.substr(startPos);
+            currentDriverPackage.driverName.erase(0, currentDriverPackage.driverName.find_first_not_of(" \t\n\r\f\v")); // Remove leading whitespaces
             driverPackages.push_back(currentDriverPackage);
         }
     }
     return driverPackages;
 }
+
 
 
 std::vector<std::string> getWMICApps() {
