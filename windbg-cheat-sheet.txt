@@ -5,3 +5,4 @@ bp - breakpoint
 $exentry - module or executable entry point
 !address "address" - used to reference a memory address
 mov eax,fs:[0x30] - process environment block pointer 
+.\symchk.exe "C:\Windows\System32\ntdll.dll" /s srv*I:\Salvation\debuggers\symbols*https://msdl.microsoft.com/download/symbols
