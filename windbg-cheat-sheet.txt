@@ -4,3 +4,4 @@ $peb - peb reference
 bp - breakpoint
 $exentry - module or executable entry point
 !address "address" - used to reference a memory address
+mov eax,fs:[0x30] - process environment block pointer 
