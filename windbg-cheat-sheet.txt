@@ -1,0 +1,5 @@
+dt -r ntdll!_IMAGE_NT_HEADERS "address" - Gets the NT headers information
+eb - edit byte
+$peb - peb reference
+bp - breakpoint
+$exentry - module or executable entry point
