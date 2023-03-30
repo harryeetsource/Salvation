@@ -3,3 +3,4 @@ eb - edit byte
 $peb - peb reference
 bp - breakpoint
 $exentry - module or executable entry point
+!address "address" - used to reference a memory address
