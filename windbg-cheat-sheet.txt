@@ -35,4 +35,4 @@ lmv m kernel32 = display verbose module info for kernel32
 SlotIdx = dump only specified slot
 TebAddr = specify thread; if omitted, the current thread is used
 To dump a files memory use:
-lmi! *module* to view size, then .writemem *path* *address* *size*
+lmi! *module* to view size, then .writemem *path* *address* *L?size*
