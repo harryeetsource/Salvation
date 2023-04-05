@@ -1,8 +1,37 @@
-dt -r ntdll!_IMAGE_NT_HEADERS "address" - Gets the NT headers information
-eb - edit byte
-$peb - peb reference
-bp - breakpoint
-$exentry - module or executable entry point
-!address "address" - used to reference a memory address
-mov eax,fs:[0x30] - process environment block pointer 
+dt -r ntdll!_IMAGE_NT_HEADERS "address" = Gets the NT headers information
+eb = edit byte
+$peb = peb reference
+!peb = dump formatted view of some PEB info
+r $peb = dump address ob PEB
+dt ntdll!_PEB = dump PEB struct
+dt ntdll!_PEB @$peb -r = dump PEB struct of our process recursively
+bp = breakpoint
+$exentry = module or executable entry point
+!address "address" = used to reference a memory address
+mov eax,fs:[0x30]=- process environment block pointer 
 .\symchk.exe "C:\Windows\System32\ntdll.dll" /s srv*I:\Salvation\debuggers\symbols*https://msdl.microsoft.com/download/symbols
+x *! = list all modules
+x ntdll!* = list all symbols of ntdll
+x kernel32!*LoadLib* = list all symbols in kernel32 matching * *
+lm = list modules
+!dlls = all loaded modules with load count
+!imgreloc = information about relocated images
+!lmi = detailed info about a module
+!dh (arg) ImgBaseAddr = dump headers -f for file headers and -s for section headers
+lmv m kernel32 = display verbose module info for kernel32
+~ = list threads
+~* = all threads
+~. = current thread
+~f ~Thread f = Freeze thread (see ~ for Thread syntax)
+~u ~Thread u = Unfreeze thread (see ~ for Thread syntax)
+~n ~Thread n = Suspend thread = increment thread's suspend count
+~m ~Thread m = Resume thread = decrement thread's suspend count
+!teb = display formatted view of the thread's environment block (TEB)
+!tls
+!tls -1
+!tls SlotIdx
+!tls [-1 | SlotIdx] TebAddr
+-1 = dump all slots for current thread
+SlotIdx = dump only specified slot
+TebAddr = specify thread; if omitted, the current thread is used
+.writemem FileName Range
