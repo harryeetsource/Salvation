@@ -16,6 +16,9 @@
 
 #include <sstream>
 #include "utils.h"
+#include <Windows.h>
+#include <TlHelp32.h>
+#include <Psapi.h>
 
 std::ostream& operator<<(std::ostream& os, const DriverPackage& driverPackage) {
     os << "Module Name: " << driverPackage.module_name << "\n"
@@ -34,7 +37,41 @@ std::ostream& operator<<(std::ostream& os, const DriverPackage& driverPackage) {
        << "Path: " << driverPackage.path;
     return os;
 }
+std::vector<unsigned long> findProcessesUsingDriver(const std::string& driverPath) {
+    std::vector<unsigned long> pids;
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
 
+    if (snapshot != INVALID_HANDLE_VALUE) {
+        PROCESSENTRY32 processEntry;
+        processEntry.dwSize = sizeof(PROCESSENTRY32);
+
+        if (Process32First(snapshot, &processEntry)) {
+            do {
+                HANDLE process = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, processEntry.th32ProcessID);
+                if (process) {
+                    HMODULE modules[1024];
+                    DWORD needed;
+
+                    if (EnumProcessModules(process, modules, sizeof(modules), &needed)) {
+                        for (unsigned int i = 0; i < (needed / sizeof(HMODULE)); i++) {
+                            char modulePath[MAX_PATH];
+                            if (GetModuleFileNameExA(process, modules[i], modulePath, sizeof(modulePath) / sizeof(char))) {
+                                if (driverPath == modulePath) {
+                                    pids.push_back(processEntry.th32ProcessID);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    CloseHandle(process);
+                }
+            } while (Process32Next(snapshot, &processEntry));
+        }
+        CloseHandle(snapshot);
+    }
+
+    return pids;
+}
 
 
 
@@ -102,7 +139,7 @@ int main() {
 }
 
     // Delete driver package
-    {
+    
       std::vector<DriverPackage> driverPackages = getDriverPackages(); // Changed to DriverPackage
 if (!driverPackages.empty()) {
     std::cout << "Driver packages found: " << std::endl;
@@ -130,10 +167,10 @@ if (!driverPackages.empty()) {
         if (result != 0) {
             std::cout << "Failed to uninstall driver. Identifying processes using the driver..." << std::endl;
 
-            std::vector<DWORD> pids = findProcessesUsingDriver(driverPackages[index].path);
+            std::vector<unsigned long> pids = findProcessesUsingDriver(driverPackages[index].path);
             if (!pids.empty()) {
                 std::cout << "The following processes are using the driver:" << std::endl;
-                for (DWORD pid : pids) {
+                for (unsigned long pid : pids) {
                     std::cout << "PID: " << pid << std::endl;
                 }
             } else {
@@ -144,8 +181,6 @@ if (!driverPackages.empty()) {
         std::cout << "Invalid selection. Please try again." << std::endl;
     }
     }
-}
-
 
       // Modified WMIC app uninstallation section
       {
