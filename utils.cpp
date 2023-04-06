@@ -1,57 +1,44 @@
 #include "utils.h"
+#include <unordered_map>
+
 std::vector<DriverPackage> getDriverPackages() {
     std::vector<DriverPackage> driverPackages;
-    std::istringstream input(exec("driverquery /FO LIST /V"));
+
+    // Retrieve the output from driverquery
+    std::istringstream driverqueryInput(exec("driverquery /FO LIST /V"));
+    std::unordered_map<std::string, std::string> driverPaths;
     std::string line;
-    DriverPackage currentDriverPackage;
+    std::string currentModuleName;
 
-    while (std::getline(input, line)) {
-        size_t delimiter = line.find(':');
-        if (delimiter != std::string::npos) {
-            std::string key = line.substr(0, delimiter);
-            std::string value = line.substr(delimiter + 1);
-            value.erase(0, value.find_first_not_of(" ")); // Remove leading spaces
-
-            if (key == "Module Name") {
-                if (!currentDriverPackage.module_name.empty()) {
-                    driverPackages.push_back(currentDriverPackage);
-                    currentDriverPackage = DriverPackage(); // Reset the struct for the next driver package
-                }
-                currentDriverPackage.module_name = value;
-            } else if (key == "Display Name") {
-                currentDriverPackage.display_name = value;
-            } else if (key == "Description") {
-                currentDriverPackage.description = value;
-            } else if (key == "Driver Type") {
-                currentDriverPackage.driver_type = value;
-            } else if (key == "Start Mode") {
-                currentDriverPackage.start_mode = value;
-            } else if (key == "State") {
-                currentDriverPackage.state = value;
-            } else if (key == "Status") {
-                currentDriverPackage.status = value;
-            } else if (key == "Accept Stop") {
-                currentDriverPackage.accept_stop = (value == "TRUE");
-            } else if (key == "Accept Pause") {
-                currentDriverPackage.accept_pause = (value == "TRUE");
-            } else if (key == "Paged Pool(bytes)") {
-                currentDriverPackage.paged_pool_bytes = std::stoi(value);
-            } else if (key == "Code(bytes)") {
-                currentDriverPackage.code_bytes = std::stoi(value);
-            } else if (key == "BSS(bytes)") {
-                currentDriverPackage.bss_bytes = std::stoi(value);
-            } else if (key == "Link Date") {
-                currentDriverPackage.link_date = value;
-            } else if (key == "Path") {
-                currentDriverPackage.path = value;
-            }
+    // Iterate through the driverquery output to obtain the driver paths
+    while (std::getline(driverqueryInput, line)) {
+        if (line.find("Module Name:") != std::string::npos) {
+            currentModuleName = line.substr(line.find(":") + 2);
+        } else if (line.find("Path:") != std::string::npos) {
+            driverPaths[currentModuleName] = line.substr(line.find(":") + 2);
         }
     }
 
-    if (!currentDriverPackage.module_name.empty()) {
-        driverPackages.push_back(currentDriverPackage); // Add the last driver package
-    }
+    // Retrieve the output from pnputil /enum-drivers
+    std::istringstream pnputilInput(exec("pnputil /enum-drivers"));
+    DriverPackage currentDriverPackage;
 
+    // Iterate through the pnputil output to obtain the driver information
+    while (std::getline(pnputilInput, line)) {
+        if (line.find("Published Name:") != std::string::npos) {
+            currentDriverPackage.infFile = line.substr(line.find(":") + 2);
+        } else if (line.find("Driver package provider:") != std::string::npos) {
+            currentDriverPackage.displayName = line.substr(line.find(":") + 2);
+        } else if (line.find("Class:") != std::string::npos) {
+            currentDriverPackage.moduleName = line.substr(line.find(":") + 2);
+            auto it = driverPaths.find(currentDriverPackage.moduleName);
+            if (it != driverPaths.end()) {
+                currentDriverPackage.path = it->second;
+                driverPackages.push_back(currentDriverPackage);
+            }
+        }
+    }
+    
     return driverPackages;
 }
 

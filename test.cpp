@@ -18,11 +18,52 @@
 #include "utils.h"
 #include <Windows.h>
 #include <TlHelp32.h>
-#include <Psapi.h>
+#include <winternl.h>
+#include <psapi.h>
 
+#pragma comment(lib, "ntdll.lib")
+
+
+std::vector<DWORD> findProcessesUsingDriver(const std::string &driverPath) {
+    std::vector<DWORD> pids;
+
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snapshot == INVALID_HANDLE_VALUE) {
+        return pids;
+    }
+
+    PROCESSENTRY32 processEntry = {0};
+    processEntry.dwSize = sizeof(PROCESSENTRY32);
+
+    if (!Process32First(snapshot, &processEntry)) {
+        CloseHandle(snapshot);
+        return pids;
+    }
+
+    do {
+        HANDLE moduleSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, processEntry.th32ProcessID);
+        if (moduleSnapshot != INVALID_HANDLE_VALUE) {
+            MODULEENTRY32 moduleEntry = {0};
+            moduleEntry.dwSize = sizeof(MODULEENTRY32);
+
+            if (Module32First(moduleSnapshot, &moduleEntry)) {
+                do {
+                    if (_stricmp(moduleEntry.szExePath, driverPath.c_str()) == 0) {
+                        pids.push_back(processEntry.th32ProcessID);
+                        break;
+                    }
+                } while (Module32Next(moduleSnapshot, &moduleEntry));
+            }
+            CloseHandle(moduleSnapshot);
+        }
+    } while (Process32Next(snapshot, &processEntry));
+
+    CloseHandle(snapshot);
+    return pids;
+}
 std::ostream& operator<<(std::ostream& os, const DriverPackage& driverPackage) {
-    os << "Module Name: " << driverPackage.module_name << "\n"
-       << "Display Name: " << driverPackage.display_name << "\n"
+    os << "Module Name: " << driverPackage.moduleName << "\n"
+       << "Display Name: " << driverPackage.displayName << "\n"
        << "Description: " << driverPackage.description << "\n"
        << "Driver Type: " << driverPackage.driver_type << "\n"
        << "Start Mode: " << driverPackage.start_mode << "\n"
@@ -37,42 +78,11 @@ std::ostream& operator<<(std::ostream& os, const DriverPackage& driverPackage) {
        << "Path: " << driverPackage.path;
     return os;
 }
-std::vector<unsigned long> findProcessesUsingDriver(const std::string& driverPath) {
-    std::vector<unsigned long> pids;
-    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-
-    if (snapshot != INVALID_HANDLE_VALUE) {
-        PROCESSENTRY32 processEntry;
-        processEntry.dwSize = sizeof(PROCESSENTRY32);
-
-        if (Process32First(snapshot, &processEntry)) {
-            do {
-                HANDLE process = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, processEntry.th32ProcessID);
-                if (process) {
-                    HMODULE modules[1024];
-                    DWORD needed;
-
-                    if (EnumProcessModules(process, modules, sizeof(modules), &needed)) {
-                        for (unsigned int i = 0; i < (needed / sizeof(HMODULE)); i++) {
-                            char modulePath[MAX_PATH];
-                            if (GetModuleFileNameExA(process, modules[i], modulePath, sizeof(modulePath) / sizeof(char))) {
-                                if (driverPath == modulePath) {
-                                    pids.push_back(processEntry.th32ProcessID);
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                    CloseHandle(process);
-                }
-            } while (Process32Next(snapshot, &processEntry));
-        }
-        CloseHandle(snapshot);
-    }
-
-    return pids;
+std::string extractDriverName(const std::string& driverPath) {
+    size_t startPos = driverPath.rfind("\\") + 1;
+    size_t endPos = driverPath.rfind(".");
+    return driverPath.substr(startPos, endPos - startPos);
 }
-
 
 
 
@@ -158,7 +168,7 @@ if (!driverPackages.empty()) {
         }
         index = std::stoi(input) - 1;
          if (index >= 0 && index < driverPackages.size()) {
-        std::string command = "pnputil /d \"" + driverPackages[index].module_name + "\"";
+        std::string command = "pnputil /d \"" + driverPackages[index].infFile+ "\"";
 
         // Execute the command to delete the selected driver package
         std::cout << "Deleting driver package: " << driverPackages[index] << std::endl;
@@ -167,7 +177,9 @@ if (!driverPackages.empty()) {
         if (result != 0) {
             std::cout << "Failed to uninstall driver. Identifying processes using the driver..." << std::endl;
 
-            std::vector<unsigned long> pids = findProcessesUsingDriver(driverPackages[index].path);
+            std::string driverName = extractDriverName(driverPackages[index].path);
+            std::vector<unsigned long> pids = findProcessesUsingDriver(driverName);
+
             if (!pids.empty()) {
                 std::cout << "The following processes are using the driver:" << std::endl;
                 for (unsigned long pid : pids) {

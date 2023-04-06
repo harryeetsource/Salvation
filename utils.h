@@ -8,8 +8,10 @@
 #include <stdexcept>
 
 struct DriverPackage {
-    std::string module_name;
-    std::string display_name;
+    std::string displayName;
+    std::string moduleName;
+    std::string infFile;
+    std::string path;
     std::string description;
     std::string driver_type;
     std::string start_mode;
@@ -21,7 +23,6 @@ struct DriverPackage {
     int code_bytes;
     int bss_bytes;
     std::string link_date;
-    std::string path;
 };
 std::vector<DriverPackage> getDriverPackages();
 std::vector<std::string> getWMICApps();
