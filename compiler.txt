@@ -1,0 +1,1 @@
+gcc.exe -std=c++17 .\test.cpp .\utils.cpp -o repair.exe -static -lstdc++ -static-libgcc -static-libstdc++ -lpsapi
