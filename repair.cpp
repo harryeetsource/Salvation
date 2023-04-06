@@ -43,67 +43,114 @@ std::vector<std::string> getDriverFilesFromOEM(const std::string& oemPath) {
 
     return driverFiles;
 }
-void enumerateLoadedModules() {
-    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-    if (snapshot == INVALID_HANDLE_VALUE) {
-        std::cerr << "CreateToolhelp32Snapshot failed." << std::endl;
-        return;
+std::string getModulePath(const std::string& moduleName) {
+    DWORD aProcesses[1024], cbNeeded, cProcesses;
+    if (!EnumProcesses(aProcesses, sizeof(aProcesses), &cbNeeded)) {
+        return "";
     }
-
-    PROCESSENTRY32 processEntry;
-    processEntry.dwSize = sizeof(PROCESSENTRY32);
-
-    if (!Process32First(snapshot, &processEntry)) {
-        std::cerr << "Process32First failed." << std::endl;
-        CloseHandle(snapshot);
-        return;
-    }
-
-    do {
-        std::cout << "Process: " << processEntry.szExeFile << " (PID: " << processEntry.th32ProcessID << ")" << std::endl;
-
-        HANDLE moduleSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, processEntry.th32ProcessID);
-        if (moduleSnapshot != INVALID_HANDLE_VALUE) {
-            MODULEENTRY32 moduleEntry;
-            moduleEntry.dwSize = sizeof(MODULEENTRY32);
-
-            if (Module32First(moduleSnapshot, &moduleEntry)) {
-                do {
-                    std::cout << "  Module: " << moduleEntry.szModule << " (Path: " << moduleEntry.szExePath << ")" << std::endl;
-                } while (Module32Next(moduleSnapshot, &moduleEntry));
+    cProcesses = cbNeeded / sizeof(DWORD);
+    for (unsigned int i = 0; i < cProcesses; i++) {
+        HANDLE hProcess = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, aProcesses[i]);
+        if (hProcess != nullptr) {
+            HMODULE hMod;
+            DWORD cbNeeded;
+            if (EnumProcessModules(hProcess, &hMod, sizeof(hMod), &cbNeeded)) {
+                char szModName[MAX_PATH];
+                if (GetModuleBaseNameA(hProcess, hMod, szModName, sizeof(szModName)) != 0) {
+                    if (_stricmp(szModName, moduleName.c_str()) == 0) {
+                        if (GetModuleFileNameExA(hProcess, hMod, szModName, sizeof(szModName)) != 0) {
+                            CloseHandle(hProcess);
+                            return szModName;
+                        }
+                    }
+                }
             }
-
-            CloseHandle(moduleSnapshot);
+            CloseHandle(hProcess);
         }
+    }
+    return "";
+}
 
-    } while (Process32Next(snapshot, &processEntry));
+bool isModuleLoadedInProcess(DWORD processID, const std::string& modulePath) {
+    HANDLE processHandle = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, processID);
 
-    CloseHandle(snapshot);
+    if (processHandle == NULL) {
+        return false;
+    }
+
+    HMODULE modules[1024];
+    DWORD modulesSize;
+    if (!EnumProcessModules(processHandle, modules, sizeof(modules), &modulesSize)) {
+        CloseHandle(processHandle);
+        return false;
+    }
+
+    DWORD moduleCount = modulesSize / sizeof(HMODULE);
+    bool moduleLoaded = false;
+
+    for (DWORD i = 0; i < moduleCount; i++) {
+        TCHAR moduleFilePath[MAX_PATH];
+        if (GetModuleFileNameEx(processHandle, modules[i], moduleFilePath, sizeof(moduleFilePath) / sizeof(TCHAR))) {
+            if (modulePath.compare(moduleFilePath) == 0) {
+                moduleLoaded = true;
+                break;
+            }
+        }
+    }
+
+    CloseHandle(processHandle);
+    return moduleLoaded;
+}
+std::vector<long unsigned int> getProcessesWithModule(const std::string& modulePath) {
+    std::vector<long unsigned int> processIds;
+    DWORD aProcesses[1024], cbNeeded, cProcesses;
+    if (!EnumProcesses(aProcesses, sizeof(aProcesses), &cbNeeded)) {
+        return processIds;
+    }
+    cProcesses = cbNeeded / sizeof(DWORD);
+    for (unsigned int i = 0; i < cProcesses; i++) {
+        HANDLE hProcess = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, aProcesses[i]);
+        if (hProcess != nullptr) {
+            HMODULE hMods[1024];
+            DWORD cbNeeded;
+            if (EnumProcessModules(hProcess, hMods, sizeof(hMods), &cbNeeded)) {
+                for (unsigned int j = 0; j < cbNeeded / sizeof(HMODULE); j++) {
+                    char szModName[MAX_PATH];
+                    if (GetModuleFileNameExA(hProcess, hMods[j], szModName, sizeof(szModName)) != 0) {
+                        if (_stricmp(szModName, modulePath.c_str()) == 0) {
+                            processIds.push_back(aProcesses[i]);
+                            break;
+                        }
+                    }
+                }
+            }
+            CloseHandle(hProcess);
+        }
+    }
+    return processIds;
 }
 
 
 
-std::string exec(const char* cmd) {
-    char buffer[128];
-    std::string result = "";
-    FILE* pipe = _popen(cmd, "r");
-    if (!pipe) throw std::runtime_error("popen() failed!");
-    try {
-        while (fgets(buffer, sizeof buffer, pipe) != NULL) {
-            result += buffer;
-        }
-    } catch (...) {
-        _pclose(pipe);
-        throw;
+
+std::string exec(const std::string& cmd) {
+    std::array<char, 128> buffer;
+    std::string result;
+    std::unique_ptr<FILE, decltype(&_pclose)> pipe(_popen(cmd.c_str(), "r"), _pclose);
+    if (!pipe) {
+        throw std::runtime_error("popen() failed!");
     }
-    _pclose(pipe);
+    while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) {
+        result += buffer.data();
+    }
     return result;
 }
 
 struct DriverPackage {
     std::string publishedName;
-    std::string driverName;
     std::string oemPath;
+    std::string driverName;
+    std::string driverPath;
 };
 std::ostream& operator<<(std::ostream& os, const DriverPackage& driverPackage) {
     os << "Published name: " << driverPackage.publishedName
@@ -112,28 +159,28 @@ std::ostream& operator<<(std::ostream& os, const DriverPackage& driverPackage) {
 }
 std::vector<DriverPackage> getDriverPackages() {
     std::vector<DriverPackage> driverPackages;
-    std::istringstream input(exec("pnputil /e"));
+    std::istringstream input(exec("pnputil /enum-drivers"));
     std::string line;
     DriverPackage currentDriverPackage;
     while (std::getline(input, line)) {
-        if (line.find("Published name :") != std::string::npos) {
+        if (line.find("Published Name") != std::string::npos) {
             size_t startPos = line.find(":") + 1;
             currentDriverPackage.publishedName = line.substr(startPos);
-            currentDriverPackage.publishedName.erase(0, currentDriverPackage.publishedName.find_first_not_of(" \t\n\r\f\v")); // Remove leading whitespaces
-        } else if (line.find("Original Name :") != std::string::npos) {
+            currentDriverPackage.publishedName.erase(0, currentDriverPackage.publishedName.find_first_not_of(" \t\n\r\f\v"));
+            currentDriverPackage.publishedName.erase(currentDriverPackage.publishedName.find_last_not_of(" \t\n\r\f\v") + 1);
+        } else if (line.find("Original Name") != std::string::npos) {
             size_t startPos = line.find(":") + 1;
             currentDriverPackage.oemPath = line.substr(startPos);
-            currentDriverPackage.oemPath.erase(0, currentDriverPackage.oemPath.find_first_not_of(" \t\n\r\f\v")); // Remove leading whitespaces
-        } else if (line.find("Driver package provider :") != std::string::npos) {
+            currentDriverPackage.oemPath.erase(0, currentDriverPackage.oemPath.find_first_not_of(" \t\n\r\f\v"));
+        } else if (line.find("Provider Name") != std::string::npos) {
             size_t startPos = line.find(":") + 1;
             currentDriverPackage.driverName = line.substr(startPos);
-            currentDriverPackage.driverName.erase(0, currentDriverPackage.driverName.find_first_not_of(" \t\n\r\f\v")); // Remove leading whitespaces
+            currentDriverPackage.driverName.erase(0, currentDriverPackage.driverName.find_first_not_of(" \t\n\r\f\v"));
             driverPackages.push_back(currentDriverPackage);
         }
     }
     return driverPackages;
 }
-
 
 
 
@@ -178,7 +225,8 @@ std::vector<std::string> getWindowsStoreApps() {
 
 
 int main() {
-  
+    
+
     // Perform full cleanup and system file check
     std::cout << "Performing full cleanup and system file check." << std::endl;
     system("dism /online /cleanup-image /startcomponentcleanup");
@@ -242,56 +290,62 @@ int main() {
 
     // Delete driver package
     {
-      std::vector<DriverPackage> driverPackages = getDriverPackages(); // Changed to DriverPackage
-        if (!driverPackages.empty()) {
-            std::cout << "Driver packages found: " << std::endl;
-            for (int i = 0; i < driverPackages.size(); i++) {
-                std::cout << i + 1 << ". " << driverPackages[i] << std::endl;
-            }
-      }
-      if (!driverPackages.empty()) {
-        std::cout << "Driver packages found: " << std::endl;
-        for (int i = 0; i < driverPackages.size(); i++) {
-          std::cout << i + 1 << ". " << driverPackages[i] << std::endl;
-        }
+      std::vector<DriverPackage> driverPackages = getDriverPackages();
+      bool foundDriver = false;
+      std::string modulePath;
+if (!driverPackages.empty()) {
+    std::cout << "Driver packages found: " << std::endl;
+    for (int i = 0; i < driverPackages.size(); i++) {
+        std::cout << i + 1 << ". " << driverPackages[i].driverName << std::endl;
+    }
+} else {
+    std::cout << "No driver packages found. Skipping driver package deletion." << std::endl;
+}
 
-        // Modified driver package deletion section
-        int index = -1;
-        while (true) {
-          std::cout << "Enter the number of the driver package to delete or press Enter to skip: ";
-          std::string input;
-          std::getline(std::cin, input);
-          if (input.empty()) {
+if (!driverPackages.empty()) {
+    int index = -1;
+    while (true) {
+        std::cout << "Enter the number of the driver package to delete or press Enter to skip: ";
+        std::string input;
+        std::getline(std::cin, input);
+        if (input.empty()) {
             break;
-          }
-          index = std::stoi(input) - 1;
-          if (index >= 0 && index < driverPackages.size()) {
-        std::string command = "pnputil /d \"" + driverPackages[index].publishedName + "\"";
-        std::cout << "Deleting driver package: " << driverPackages[index] << std::endl;
-        int ret = system(command.c_str());
+        }
+        index = std::stoi(input) - 1;
+        if (index >= 0 && index < driverPackages.size()) {
+            std::string command = "pnputil /d \"" + driverPackages[index].publishedName + "\"";
+            std::cout << "Deleting driver package: " << driverPackages[index].driverName << std::endl;
+            int ret = system(command.c_str());
 
-        if (ret != 0) {
-        std::cout << "Failed to delete driver package. Checking for related modules..." << std::endl;
-        std::string oemPath = driverPackages[index].oemPath; // Assuming your DriverPackage structure has an 'oemPath' member
-        std::vector<std::string> driverFiles = getDriverFilesFromOEM(oemPath);
+            // Modify the deletion section
+if (ret != 0) {
+    std::cout << "Failed to delete driver package. Checking for related modules..." << std::endl;
+    std::string modulePath = getModulePath(driverPackages[index].driverName);
+    if (!modulePath.empty()) {
+        std::cout << "Module path: " << modulePath << std::endl;
 
-        if (!driverFiles.empty()) {
-            std::cout << "The following modules are associated with the driver package:" << std::endl;
-            for (const std::string& driverFile : driverFiles) {
-                std::cout << driverFile << std::endl;
+        std::vector<DWORD> processesWithModule = getProcessesWithModule(modulePath);
+        if (!processesWithModule.empty()) {
+            std::cout << "The following processes have the module loaded:" << std::endl;
+            for (const DWORD& processID : processesWithModule) {
+                std::cout << "Process ID: " << processID << std::endl;
             }
         } else {
-            std::cout << "No modules found associated with the driver package." << std::endl;
+            std::cout << "No processes found with the module loaded." << std::endl;
         }
-    }
     } else {
-        std::cout << "Invalid selection. Please try again." << std::endl;
+        std::cout << "No modules found associated with the driver package." << std::endl;
     }
+}
+        } else {
+            std::cout << "Invalid selection. Please try again." << std::endl;
         }
-      } else {
-        std::cout << "No driver packages found. Skipping driver package deletion." << std::endl;
-      }
     }
+}
+
+
+    }
+
 
 
       // Modified WMIC app uninstallation section
