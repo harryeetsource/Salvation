@@ -13,7 +13,7 @@
 #include <array>
 
 #include <vector>
-
+#include <algorithm>
 #include <sstream>
 
 #include <Windows.h>
@@ -23,16 +23,46 @@
 #include <TlHelp32.h>
 #pragma comment(lib, "Psapi.lib")
 struct DriverPackage {
-    std::string publishedName;
-    std::string originalName;
     std::string driverName;
-    std::string oemPath;
-
-    friend std::ostream& operator<<(std::ostream& os, const DriverPackage& dp) {
-        os << dp.publishedName;
-        return os;
-    }
+    std::string publishedName;
+    std::string driverPackagePath;
+    std::string providerName;
+    std::string driverClass;
+    std::string version;
+    std::string date;
+    std::string description;
+    std::string infFileName;
+    std::string infPublishedName;
+    std::string infManufacturer;
+    std::string infDriverVersion;
+    std::string infClassName;
+    std::string infClassGuid;
+    std::string infProvider;
+    std::string infDriverDate;
+    int rank;
 };
+
+
+std::ostream& operator<<(std::ostream& os, const DriverPackage& driverPackage) {
+    os << "Driver Name: " << driverPackage.driverName << std::endl;
+    os << "Published Name: " << driverPackage.publishedName << std::endl;
+    os << "Driver Package Path: " << driverPackage.driverPackagePath << std::endl;
+    os << "Provider Name: " << driverPackage.providerName << std::endl;
+    os << "Driver Class: " << driverPackage.driverClass << std::endl;
+    os << "Version: " << driverPackage.version << std::endl;
+    os << "Date: " << driverPackage.date << std::endl;
+    os << "Description: " << driverPackage.description << std::endl;
+    os << "Inf File Name: " << driverPackage.infFileName << std::endl;
+    os << "Inf Published Name: " << driverPackage.infPublishedName << std::endl;
+    os << "Inf Manufacturer: " << driverPackage.infManufacturer << std::endl;
+    os << "Inf Driver Version: " << driverPackage.infDriverVersion << std::endl;
+    os << "Inf Class Name: " << driverPackage.infClassName << std::endl;
+    os << "Inf Class Guid: " << driverPackage.infClassGuid << std::endl;
+    os << "Inf Provider: " << driverPackage.infProvider << std::endl;
+
+    return os;
+}
+
 
 std::string exec(const std::string& cmd) {
     std::array<char, 128> buffer;
@@ -136,27 +166,41 @@ std::vector<long unsigned int> getProcessesWithModule(const std::string& moduleP
 }
 std::vector<DriverPackage> getDriverPackages() {
     std::vector<DriverPackage> driverPackages;
-    std::istringstream input(exec("pnputil /e"));
-    std::string line;
+    std::string command = "pnputil /enum-drivers /all /v /fo list";
+    std::vector<std::string> outputLines = splitString(exec(command), '\n');
+
     DriverPackage currentDriverPackage;
-    while (std::getline(input, line)) {
-        if (line.find("Published name :") != std::string::npos) {
-            size_t startPos = line.find(":") + 1;
-            currentDriverPackage.publishedName = line.substr(startPos);
-            currentDriverPackage.publishedName.erase(0, currentDriverPackage.publishedName.find_first_not_of(" \t\n\r\f\v")); // Remove leading whitespaces
-        } else if (line.find("Original Name :") != std::string::npos) {
-            size_t startPos = line.find(":") + 1;
-            currentDriverPackage.oemPath = line.substr(startPos);
-            currentDriverPackage.oemPath.erase(0, currentDriverPackage.oemPath.find_first_not_of(" \t\n\r\f\v")); // Remove leading whitespaces
-        } else if (line.find("Driver package provider :") != std::string::npos) {
-            size_t startPos = line.find(":") + 1;
-            currentDriverPackage.driverName = line.substr(startPos);
-            currentDriverPackage.driverName.erase(0, currentDriverPackage.driverName.find_first_not_of(" \t\n\r\f\v")); // Remove leading whitespaces
-            driverPackages.push_back(currentDriverPackage);
+
+    for (const std::string& line : outputLines) {
+        if (line.find("Published name") != std::string::npos) {
+            if (!currentDriverPackage.driverName.empty()) {
+                driverPackages.push_back(currentDriverPackage);
+                currentDriverPackage = DriverPackage();
+            }
+            currentDriverPackage.publishedName = line.substr(line.find(": ") + 2);
+        } else if (line.find("Driver package provider") != std::string::npos) {
+            currentDriverPackage.providerName = line.substr(line.find(": ") + 2);
+        } else if (line.find("Class name") != std::string::npos) {
+            currentDriverPackage.driverClass = line.substr(line.find(": ") + 2);
+        } else if (line.find("Driver date and version") != std::string::npos) {
+            std::string dateAndVersion = line.substr(line.find(": ") + 2);
+            currentDriverPackage.date = dateAndVersion.substr(0, dateAndVersion.find(","));
+            currentDriverPackage.version = dateAndVersion.substr(dateAndVersion.find(",") + 2);
+        } else if (line.find("Driver description") != std::string::npos) {
+            currentDriverPackage.description = line.substr(line.find(": ") + 2);
+        } else if (line.find("Driver rank") != std::string::npos) {
+            currentDriverPackage.rank = std::stoi(line.substr(line.find(": ") + 2));
         }
     }
+
+    if (!currentDriverPackage.driverName.empty()) {
+        driverPackages.push_back(currentDriverPackage);
+    }
+
     return driverPackages;
 }
+
+
 
 
 
@@ -299,7 +343,8 @@ if (!driverPackages.empty()) {
             if (ret != 0) {
                 std::cout << "Failed to delete driver package. Checking for related modules..." << std::endl;
                 std::string driverName = driverPackages[index].driverName;
-std::string command = "driverquery /FO LIST /V /filter driver=" + driverName;
+std::string command = "driverquery /FO LIST /V | find /i \"" + driverName + "\"";
+
 std::string outputString = exec(command);
 std::vector<std::string> outputLines = {outputString};
 
