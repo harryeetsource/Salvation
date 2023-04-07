@@ -92,7 +92,7 @@ int main() {
     system("net stop wuauserv");
     system("net stop bits");
     std::cout << "Resetting WUAservice" << std::endl;
-    system("net stop crypsvc");
+    system("net stop cryptsvc");
     system("rd /s /q %systemroot%\\SoftwareDistribution");
     system("Del \"%ALLUSERSPROFILE%\\Application Data\\Microsoft\\Network\\Downloader\\qmgr*.dat\"");
     system("Ren %Systemroot%\\SoftwareDistribution\\DataStore DataStore.bak");
@@ -110,7 +110,7 @@ int main() {
     "wuapi.dll", "wuaueng.dll", "wuaueng1.dll", "wucltui.dll", "wups.dll", "wups2.dll",
     "wuweb.dll", "qmgr.dll", "qmgrprxy.dll", "wucltux.dll", "muweb.dll", "wuwebv.dll"
 };
-
+std::cout << "Silently registering essential windows update modules" << std::endl;
 for (const char* dll : dlls) {
     std::string command = "regsvr32.exe /s /i " + std::string(dll);
     system(command.c_str());

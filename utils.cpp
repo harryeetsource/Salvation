@@ -1,6 +1,7 @@
 #include "utils.h"
 #include <unordered_map>
 #include <regex>
+#include <iostream>
 std::vector<std::string> split(const std::string& s, char delimiter) {
     std::vector<std::string> tokens;
     std::string token;
@@ -17,40 +18,63 @@ std::vector<DriverPackage> getDriverPackages() {
     std::istringstream pnputilStream(pnputilOutput);
     std::string line;
 
+    std::cout << "Starting to process pnputil output..." << std::endl;
+
     while (std::getline(pnputilStream, line)) {
         if (line.find(".inf") != std::string::npos) {
+            std::cout << "Found .inf line: " << line << std::endl;
             DriverPackage driverPackage;
-            driverPackage.infFile = split(line, ' ')[0];
+            driverPackage.infFile = trim(split(line, ':')[1]);
 
-            std::string moduleName = split(line, ' ')[1];
+            std::string moduleName = trim(split(line, ':')[3]);
             driverPackage.moduleName = moduleName;
 
-            std::string driverqueryCommand = "driverquery /V /FO LIST ";
-std::string moduleNameQuoted = "\"" + driverPackage.moduleName + "\"";
-std::string driverqueryOutput = exec((driverqueryCommand + moduleNameQuoted).c_str());
+            std::string driverqueryCommand = "driverquery /V /FO LIST /FI \"MODULENAME eq " + moduleName + "\"";
+            std::string driverqueryOutput = exec(driverqueryCommand.c_str());
 
             std::istringstream driverqueryStream(driverqueryOutput);
-            std::string driverLine;
-            bool foundModuleName = false;
-            while (std::getline(driverqueryStream, driverLine)) {
-                std::vector<std::string> parts = split(driverLine, ',');
+            std::string driverqueryLine;
 
-                if (!foundModuleName) {
-                    if (parts.size() >= 2 && parts[0].substr(1, parts[0].size() - 2) == moduleName) {
-                        foundModuleName = true;
+            std::cout << "Processing driverquery output for: " << moduleName << std::endl;
+
+            while (std::getline(driverqueryStream, driverqueryLine)) {
+                if (driverqueryLine.find("Path") != std::string::npos) {
+                    std::vector<std::string> pathParts = split(driverqueryLine, ':');
+                    if (pathParts.size() > 1) {
+                        driverPackage.path = trim(pathParts[1]);
+                        break;
                     }
-                } else if (foundModuleName && parts.size() >= 2 && parts[0].substr(1, parts[0].size() - 2) == "Path") {
-                    driverPackage.path = parts[1].substr(1, parts[1].size() - 2);
-                    break;
                 }
             }
 
             driverPackages.push_back(driverPackage);
+            std::cout << "Added driver package for: " << moduleName << std::endl;
         }
     }
 
+    std::cout << "Finished processing pnputil output." << std::endl;
+
     return driverPackages;
 }
+
+
+
+
+
+std::string trim(const std::string& str) {
+    size_t first = str.find_first_not_of(" \t");
+    if (first == std::string::npos) {
+        return "";
+    }
+    size_t last = str.find_last_not_of(" \t");
+    return str.substr(first, (last - first + 1));
+}
+
+
+
+
+
+
 
 
 
