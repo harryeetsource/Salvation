@@ -63,21 +63,11 @@ std::vector<DWORD> findProcessesUsingDriver(const std::string &driverPath) {
 }
 std::ostream& operator<<(std::ostream& os, const DriverPackage& driverPackage) {
     os << "Module Name: " << driverPackage.moduleName << "\n"
-       << "Display Name: " << driverPackage.displayName << "\n"
-       << "Description: " << driverPackage.description << "\n"
-       << "Driver Type: " << driverPackage.driver_type << "\n"
-       << "Start Mode: " << driverPackage.start_mode << "\n"
-       << "State: " << driverPackage.state << "\n"
-       << "Status: " << driverPackage.status << "\n"
-       << "Accept Stop: " << (driverPackage.accept_stop ? "TRUE" : "FALSE") << "\n"
-       << "Accept Pause: " << (driverPackage.accept_pause ? "TRUE" : "FALSE") << "\n"
-       << "Paged Pool(bytes): " << driverPackage.paged_pool_bytes << "\n"
-       << "Code(bytes): " << driverPackage.code_bytes << "\n"
-       << "BSS(bytes): " << driverPackage.bss_bytes << "\n"
-       << "Link Date: " << driverPackage.link_date << "\n"
+       << "INF File: " << driverPackage.infFile << "\n"
        << "Path: " << driverPackage.path;
     return os;
 }
+
 std::string extractDriverName(const std::string& driverPath) {
     size_t startPos = driverPath.rfind("\\") + 1;
     size_t endPos = driverPath.rfind(".");
@@ -101,10 +91,38 @@ int main() {
     std::cout << "Cleaning up Windows Update cache." << std::endl;
     system("net stop wuauserv");
     system("net stop bits");
+    std::cout << "Resetting WUAservice" << std::endl;
+    system("net stop crypsvc");
     system("rd /s /q %systemroot%\\SoftwareDistribution");
+    system("Del \"%ALLUSERSPROFILE%\\Application Data\\Microsoft\\Network\\Downloader\\qmgr*.dat\"");
+    system("Ren %Systemroot%\\SoftwareDistribution\\DataStore DataStore.bak");
+    system("Ren %Systemroot%\\SoftwareDistribution\\Download Download.bak");
+    system("Ren %Systemroot%\\System32\\catroot2 catroot2.bak");
+    system("sc.exe sdset bits D:(A;CI;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCLCSWLOCRRC;;;IU)(A;;CCLCSWLOCRRC;;;SU)");
+    system("sc.exe sdset wuauserv D:(A;;CCLCSWRPLORC;;;AU)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;SY))");
+    system("cd /d %windir%\\system32");
+
+    const char* dlls[] = {
+    "atl.dll", "urlmon.dll", "mshtml.dll", "shdocvw.dll", "browseui.dll", "jscript.dll",
+    "vbscript.dll", "scrrun.dll", "msxml.dll", "msxml3.dll", "msxml6.dll", "actxprxy.dll",
+    "softpub.dll", "wintrust.dll", "dssenh.dll", "rsaenh.dll", "gpkcsp.dll", "sccbase.dll",
+    "slbcsp.dll", "cryptdlg.dll", "oleaut32.dll", "ole32.dll", "shell32.dll", "initpki.dll",
+    "wuapi.dll", "wuaueng.dll", "wuaueng1.dll", "wucltui.dll", "wups.dll", "wups2.dll",
+    "wuweb.dll", "qmgr.dll", "qmgrprxy.dll", "wucltux.dll", "muweb.dll", "wuwebv.dll"
+};
+
+for (const char* dll : dlls) {
+    std::string command = "regsvr32.exe /s /i " + std::string(dll);
+    system(command.c_str());
+}
+
+    system("netsh winsock reset");
+
+
     system("net start wuauserv");
     system("net start bits");
-
+    system("net start cryptsvc");
+    
     // Perform additional cleanup steps
     std::cout << "Performing additional cleanup steps." << std::endl;
     system("cleanmgr /sagerun:1");
@@ -150,14 +168,13 @@ int main() {
 
     // Delete driver package
     
-      std::vector<DriverPackage> driverPackages = getDriverPackages(); // Changed to DriverPackage
+      std::vector<DriverPackage> driverPackages = getDriverPackages();
 if (!driverPackages.empty()) {
     std::cout << "Driver packages found: " << std::endl;
     for (int i = 0; i < driverPackages.size(); i++) {
         std::cout << i + 1 << ". " << driverPackages[i] << std::endl;
     }
 
-    // Modified driver package deletion section
     int index = -1;
     while (true) {
         std::cout << "Enter the number of the driver package to delete or press Enter to skip: ";
@@ -167,32 +184,33 @@ if (!driverPackages.empty()) {
             break;
         }
         index = std::stoi(input) - 1;
-         if (index >= 0 && index < driverPackages.size()) {
-        std::string command = "pnputil /d \"" + driverPackages[index].infFile+ "\"";
+        if (index >= 0 && index < driverPackages.size()) {
+            std::string command = "pnputil /d \"" + driverPackages[index].infFile + "\"";
 
-        // Execute the command to delete the selected driver package
-        std::cout << "Deleting driver package: " << driverPackages[index] << std::endl;
-        int result = system(command.c_str());
+            std::cout << "Deleting driver package: " << driverPackages[index] << std::endl;
+            int result = system(command.c_str());
 
-        if (result != 0) {
-            std::cout << "Failed to uninstall driver. Identifying processes using the driver..." << std::endl;
+            if (result != 0) {
+                std::cout << "Failed to uninstall driver. Identifying processes using the driver..." << std::endl;
 
-            std::string driverName = extractDriverName(driverPackages[index].path);
-            std::vector<unsigned long> pids = findProcessesUsingDriver(driverName);
+                std::string driverPath = driverPackages[index].path;
+                std::vector<unsigned long> pids = findProcessesUsingDriver(driverPath);
 
-            if (!pids.empty()) {
-                std::cout << "The following processes are using the driver:" << std::endl;
-                for (unsigned long pid : pids) {
-                    std::cout << "PID: " << pid << std::endl;
+                if (!pids.empty()) {
+                    std::cout << "The following processes are using the driver:" << std::endl;
+                    for (unsigned long pid : pids) {
+                        std::cout << "PID: " << pid << std::endl;
+                    }
+                } else {
+                    std::cout << "No processes are using the driver." << std::endl;
                 }
-            } else {
-                std::cout << "No processes are using the driver." << std::endl;
             }
+        } else {
+            std::cout << "Invalid selection. Please try again." << std::endl;
         }
-    } else {
-        std::cout << "Invalid selection. Please try again." << std::endl;
     }
-    }
+
+
 
       // Modified WMIC app uninstallation section
       {
@@ -260,7 +278,7 @@ if (!driverPackages.empty()) {
       system("bcdedit /set {default} bootmenupolicy Standard");
       std::cout << "Enabling secure boot-step 2." << std::endl;
       system("powershell -command \"Confirm-SecureBootUEFI\"");
-
+      
       std::cout << "Disabling Microsoft Office macros." << std::endl;
       system("reg add \"HKEY_CURRENT_USER\\Software\\Microsoft\\Office\\16.0\\Excel\\Security\" /v VBAWarnings /t REG_DWORD /d 4 /f");
       system("reg add \"HKEY_CURRENT_USER\\Software\\Microsoft\\Office\\16.0\\PowerPoint\\Security\" /v VBAWarnings /t REG_DWORD /d 4 /f");

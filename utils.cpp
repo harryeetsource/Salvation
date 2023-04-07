@@ -1,46 +1,62 @@
 #include "utils.h"
 #include <unordered_map>
-
+#include <regex>
+std::vector<std::string> split(const std::string& s, char delimiter) {
+    std::vector<std::string> tokens;
+    std::string token;
+    std::istringstream tokenStream(s);
+    while (std::getline(tokenStream, token, delimiter)) {
+        tokens.push_back(token);
+    }
+    return tokens;
+}
 std::vector<DriverPackage> getDriverPackages() {
     std::vector<DriverPackage> driverPackages;
 
-    // Retrieve the output from driverquery
-    std::istringstream driverqueryInput(exec("driverquery /FO LIST /V"));
-    std::unordered_map<std::string, std::string> driverPaths;
+    std::string pnputilOutput = exec("pnputil /enum-drivers");
+    std::istringstream pnputilStream(pnputilOutput);
     std::string line;
-    std::string currentModuleName;
 
-    // Iterate through the driverquery output to obtain the driver paths
-    while (std::getline(driverqueryInput, line)) {
-        if (line.find("Module Name:") != std::string::npos) {
-            currentModuleName = line.substr(line.find(":") + 2);
-        } else if (line.find("Path:") != std::string::npos) {
-            driverPaths[currentModuleName] = line.substr(line.find(":") + 2);
-        }
-    }
+    while (std::getline(pnputilStream, line)) {
+        if (line.find(".inf") != std::string::npos) {
+            DriverPackage driverPackage;
+            driverPackage.infFile = split(line, ' ')[0];
 
-    // Retrieve the output from pnputil /enum-drivers
-    std::istringstream pnputilInput(exec("pnputil /enum-drivers"));
-    DriverPackage currentDriverPackage;
+            std::string moduleName = split(line, ' ')[1];
+            driverPackage.moduleName = moduleName;
 
-    // Iterate through the pnputil output to obtain the driver information
-    while (std::getline(pnputilInput, line)) {
-        if (line.find("Published Name:") != std::string::npos) {
-            currentDriverPackage.infFile = line.substr(line.find(":") + 2);
-        } else if (line.find("Driver package provider:") != std::string::npos) {
-            currentDriverPackage.displayName = line.substr(line.find(":") + 2);
-        } else if (line.find("Class:") != std::string::npos) {
-            currentDriverPackage.moduleName = line.substr(line.find(":") + 2);
-            auto it = driverPaths.find(currentDriverPackage.moduleName);
-            if (it != driverPaths.end()) {
-                currentDriverPackage.path = it->second;
-                driverPackages.push_back(currentDriverPackage);
+            std::string driverqueryCommand = "driverquery /V /FO LIST ";
+std::string moduleNameQuoted = "\"" + driverPackage.moduleName + "\"";
+std::string driverqueryOutput = exec((driverqueryCommand + moduleNameQuoted).c_str());
+
+            std::istringstream driverqueryStream(driverqueryOutput);
+            std::string driverLine;
+            bool foundModuleName = false;
+            while (std::getline(driverqueryStream, driverLine)) {
+                std::vector<std::string> parts = split(driverLine, ',');
+
+                if (!foundModuleName) {
+                    if (parts.size() >= 2 && parts[0].substr(1, parts[0].size() - 2) == moduleName) {
+                        foundModuleName = true;
+                    }
+                } else if (foundModuleName && parts.size() >= 2 && parts[0].substr(1, parts[0].size() - 2) == "Path") {
+                    driverPackage.path = parts[1].substr(1, parts[1].size() - 2);
+                    break;
+                }
             }
+
+            driverPackages.push_back(driverPackage);
         }
     }
-    
+
     return driverPackages;
 }
+
+
+
+
+
+
 
 std::vector<std::string> getWMICApps() {
     std::vector<std::string> wmicApps;
@@ -80,15 +96,16 @@ std::vector<std::string> getWindowsStoreApps() {
 
     return storeApps;
 }
-std::string exec(const char * cmd) {
-  std::array < char, 128 > buffer;
-  std::string result;
-  std::unique_ptr < FILE, decltype( & pclose) > pipe(popen(cmd, "r"), pclose);
-  if (!pipe) {
-    throw std::runtime_error("popen() failed!");
-  }
-  while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) {
-    result += buffer.data();
-  }
-  return result;
+std::string exec(const char* cmd) {
+    std::array<char, 128> buffer;
+    std::string result;
+    std::unique_ptr<FILE, decltype(&_pclose)> pipe(_popen(cmd, "r"), _pclose);
+    if (!pipe) {
+        throw std::runtime_error("popen() failed!");
+    }
+    while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) {
+        result += buffer.data();
+    }
+    return result;
 }
+
