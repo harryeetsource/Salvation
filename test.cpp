@@ -167,8 +167,7 @@ for (const char* dll : dlls) {
 }
 
     // Delete driver package
-    
-      std::vector<DriverPackage> driverPackages = getDriverPackages();
+   std::vector<DriverPackage> driverPackages = getDriverPackages();
 if (!driverPackages.empty()) {
     std::cout << "Driver packages found: " << std::endl;
     for (int i = 0; i < driverPackages.size(); i++) {
@@ -183,7 +182,15 @@ if (!driverPackages.empty()) {
         if (input.empty()) {
             break;
         }
-        index = std::stoi(input) - 1;
+        
+        std::stringstream ss(input);
+        if (ss >> index) {
+            index -= 1;
+        } else {
+            std::cout << "Invalid input. Please try again." << std::endl;
+            continue;
+        }
+
         if (index >= 0 && index < driverPackages.size()) {
             std::string command = "pnputil /d \"" + driverPackages[index].infFile + "\"";
 
@@ -209,6 +216,8 @@ if (!driverPackages.empty()) {
             std::cout << "Invalid selection. Please try again." << std::endl;
         }
     }
+}
+
 
 
 
@@ -242,7 +251,7 @@ if (!driverPackages.empty()) {
           std::cout << "No WMIC apps found. Skipping WMIC app uninstallation." << std::endl;
         }
       }
-    }
+    
       // Disable insecure windows features
       std::cout << "Disabling insecure windows features" << std::endl;
       system("dism /online /disable-feature /featurename:WindowsMediaPlayer");

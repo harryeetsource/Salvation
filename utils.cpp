@@ -2,6 +2,10 @@
 #include <unordered_map>
 #include <regex>
 #include <iostream>
+#include <fstream>
+#include <iterator>
+#include <memory>
+#include <array>
 std::vector<std::string> split(const std::string& s, char delimiter) {
     std::vector<std::string> tokens;
     std::string token;
@@ -20,6 +24,15 @@ std::vector<DriverPackage> getDriverPackages() {
 
     std::cout << "Starting to process pnputil output..." << std::endl;
 
+    std::string driverqueryOutput = exec("driverquery /V /FO LIST");
+    std::istringstream driverqueryStream(driverqueryOutput);
+    std::vector<std::string> driverqueryLines;
+    std::string driverqueryLine;
+
+    while (std::getline(driverqueryStream, driverqueryLine)) {
+        driverqueryLines.push_back(driverqueryLine);
+    }
+
     while (std::getline(pnputilStream, line)) {
         if (line.find(".inf") != std::string::npos) {
             std::cout << "Found .inf line: " << line << std::endl;
@@ -28,22 +41,20 @@ std::vector<DriverPackage> getDriverPackages() {
 
             std::string moduleName = trim(split(line, ':')[3]);
             driverPackage.moduleName = moduleName;
-
-            std::string driverqueryCommand = "driverquery /V /FO LIST /FI \"MODULENAME eq " + moduleName + "\"";
-            std::string driverqueryOutput = exec(driverqueryCommand.c_str());
-
-            std::istringstream driverqueryStream(driverqueryOutput);
-            std::string driverqueryLine;
+            std::cout << "Parsed moduleName: " << moduleName << std::endl;
 
             std::cout << "Processing driverquery output for: " << moduleName << std::endl;
 
-            while (std::getline(driverqueryStream, driverqueryLine)) {
-                if (driverqueryLine.find("Path") != std::string::npos) {
-                    std::vector<std::string> pathParts = split(driverqueryLine, ':');
-                    if (pathParts.size() > 1) {
-                        driverPackage.path = trim(pathParts[1]);
-                        break;
-                    }
+            bool foundModuleName = false;
+            for (const auto& dqLine : driverqueryLines) {
+                std::cout << "Driverquery line: " << dqLine << std::endl;
+                if (dqLine.find(moduleName) != std::string::npos) {
+                    foundModuleName = true;
+                    std::cout << "Found moduleName in driverquery output: " << moduleName << std::endl;
+                } else if (foundModuleName && dqLine.find("Path") != std::string::npos) {
+                    driverPackage.path = trim(split(dqLine, ':')[1]);
+                    std::cout << "Found Path: " << driverPackage.path << std::endl;
+                    break;
                 }
             }
 
@@ -56,6 +67,30 @@ std::vector<DriverPackage> getDriverPackages() {
 
     return driverPackages;
 }
+
+
+
+
+std::string exec(const char* cmd) {
+    std::array<char, 128> buffer{};
+    std::string result;
+    std::unique_ptr<FILE, decltype(&_pclose)> pipe(_popen(cmd, "r"), _pclose);
+    if (!pipe) {
+        throw std::runtime_error("popen() failed!");
+    }
+    while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) {
+        result += buffer.data();
+    }
+    return result;
+}
+
+
+
+
+
+
+
+
 
 
 
@@ -120,16 +155,5 @@ std::vector<std::string> getWindowsStoreApps() {
 
     return storeApps;
 }
-std::string exec(const char* cmd) {
-    std::array<char, 128> buffer;
-    std::string result;
-    std::unique_ptr<FILE, decltype(&_pclose)> pipe(_popen(cmd, "r"), _pclose);
-    if (!pipe) {
-        throw std::runtime_error("popen() failed!");
-    }
-    while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) {
-        result += buffer.data();
-    }
-    return result;
-}
+
 
