@@ -36,21 +36,27 @@ func main() {
 	executeCommand("sfc /scannow")
 
 	fmt.Println("Deleting Prefetch files.")
-	executeCommand("del /s /q /f %systemroot%\\Prefetch\\*")
-
+	systemRoot := os.Getenv("SystemRoot")
+	cmd := fmt.Sprintf("del /s /q /f %s\\Prefetch\\*", systemRoot)
+	executeCommand(cmd)
 	fmt.Println("Cleaning up Windows Update cache.")
 	executeCommand("net stop wuauserv")
 	executeCommand("net stop bits")
 	fmt.Println("Resetting WUAservice")
 	executeCommand("net stop cryptsvc")
 	executeCommand("rd /s /q %systemroot%\\SoftwareDistribution")
-	executeCommand("Del \"%ALLUSERSPROFILE%\\Application Data\\Microsoft\\Network\\Downloader\\qmgr*.dat\"")
-	executeCommand("Ren %Systemroot%\\SoftwareDistribution\\DataStore DataStore.bak")
-	executeCommand("Ren %Systemroot%\\SoftwareDistribution\\Download Download.bak")
-	executeCommand("Ren %Systemroot%\\System32\\catroot2 catroot2.bak")
+	executeCommand(fmt.Sprintf("Del \"%s\\Application Data\\Microsoft\\Network\\Downloader\\qmgr*.dat\"", os.Getenv("ALLUSERSPROFILE")))
+	executeCommand(fmt.Sprintf("Ren %s\\SoftwareDistribution\\DataStore DataStore.bak", systemRoot))
+	executeCommand(fmt.Sprintf("Ren %s\\SoftwareDistribution\\Download Download.bak", systemRoot))
+	executeCommand(fmt.Sprintf("Ren %s\\System32\\catroot2 catroot2.bak", systemRoot))
 	executeCommand("sc.exe sdset bits D:(A;CI;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCLCSWLOCRRC;;;IU)(A;;CCLCSWLOCRRC;;;SU)")
 	executeCommand("sc.exe sdset wuauserv D:(A;;CCLCSWRPLORC;;;AU)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;SY))")
-	executeCommand("cd /d %windir%\\system32")
+	// Change the working directory
+	windir := os.Getenv("windir")
+	err := os.Chdir(fmt.Sprintf("%s\\system32", windir))
+	if err != nil {
+		fmt.Println("Error changing the working directory:", err)
+	}
 
 	dlls := []string{
 		"atl.dll", "urlmon.dll", "mshtml.dll", "shdocvw.dll", "browseui.dll", "jscript.dll",
@@ -69,8 +75,8 @@ func main() {
 	executeCommand("net start wuauserv")
 	executeCommand("net start cryptsvc")
 	executeCommand("net stop fontcache")
-	executeCommand("del /f /s /q /a %systemroot%\\ServiceProfiles\\LocalService\\AppData\\Local\\FontCache\\*")
-	executeCommand("del /f /s /q /a %systemroot%\\ServiceProfiles\\LocalService\\AppData\\Local\\FontCache-System\\*")
+	executeCommand(fmt.Sprintf("del /f /s /q /a %s\\ServiceProfiles\\LocalService\\AppData\\Local\\FontCache\\*", systemRoot))
+	executeCommand(fmt.Sprintf("del /f /s /q /a %s\\ServiceProfiles\\LocalService\\AppData\\Local\\FontCache-System\\*", systemRoot))
 	executeCommand("net start fontcache")
 	executeCommand("cleanmgr /sagerun:1")
 	fmt.Println("Disabling Insecure Windows Features")
@@ -86,7 +92,7 @@ func main() {
 	fmt.Println("UAC step 2")
 	executeCommand("reg add \"HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System\" /v ConsentPromptBehaviorAdmin /t REG_DWORD /d 2 /f")
 	fmt.Println("Deleting windows logs older than 7 days")
-	executeCommand("forfiles /p \"C:\\Windows\\Logs\" /s /m *.log /d -7 /c \"cmd /c del @path\"")
+	executeCommand(fmt.Sprintf("forfiles /p \"%s\\Logs\" /s /m *.log /d -7 /c \"cmd /c del @path\"", systemRoot))
 	fmt.Println("Enabling Windows Credential Guard")
 	executeCommand("reg add \"HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\LSA\" /v LsaCfgFlags /t REG_DWORD /d 1 /f")
 	executeCommand("bcdedit /set {0cb3b571-2f2e-4343-a879-d86a476d7215} loadoptions DISABLE-LSA-ISO,DISABLE-VSM")
@@ -115,7 +121,7 @@ func main() {
 	fmt.Println("Enabling Memory Integrity")
 	executeCommand("reg add \"HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\Windows\\DeliveryOptimization\" /v DODownloadMode /t REG_DWORD /d 0 /f")
 	fmt.Println("Emptying the Recycling bin")
-	executeCommand("rd /s /q %systemdrive%\\$Recycle.Bin")
+	executeCommand(fmt.Sprintf("rd /s /q %s\\$Recycle.Bin", os.Getenv("systemdrive")))
 	fmt.Println("Disabling Insecure Windows Features")
 	executeCommand("powershell.exe Set-MpPreference -DisableRealtimeMonitoring 0")
 	fmt.Println("Enabling Windows Security Center Service")
