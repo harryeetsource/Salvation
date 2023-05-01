@@ -12,7 +12,7 @@ func executeCommand(command string) {
 	cmd.Stderr = os.Stderr
 	err := cmd.Run()
 	if err != nil {
-		fmt.Printf("Error executing command: %v\n", err)
+		fmt.Printf("Error executing command '%s': %v\n", command, err)
 	}
 }
 
@@ -68,7 +68,7 @@ func main() {
 	}
 	fmt.Println("Silently registering essential windows update modules")
 	for _, dll := range dlls {
-		command := "regsvr32.exe /s /i " + dll
+		command := "regsvr32.exe /s" + dll
 		executeCommand(command)
 	}
 	executeCommand("net start bits")
@@ -119,7 +119,7 @@ func main() {
 	fmt.Println("Disabling Windows Delivery Optimization")
 	executeCommand("reg add \"HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\Windows\\DeliveryOptimization\" /v DODownloadMode /t REG_DWORD /d 0 /f")
 	fmt.Println("Enabling Memory Integrity")
-	executeCommand("reg add \"HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\Windows\\DeliveryOptimization\" /v DODownloadMode /t REG_DWORD /d 0 /f")
+	executeCommand("reg add \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\DeviceGuard\\Scenarios\\HypervisorEnforcedCodeIntegrity\" /v Enabled /t REG_DWORD /d 1 /f")
 	fmt.Println("Emptying the Recycling bin")
 	executeCommand(fmt.Sprintf("rd /s /q %s\\$Recycle.Bin", os.Getenv("systemdrive")))
 	fmt.Println("Disabling Insecure Windows Features")
