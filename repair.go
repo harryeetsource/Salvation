@@ -4,16 +4,18 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 )
 
-func executeCommand(command string) {
+func executeCommand(command string) error {
 	cmd := exec.Command("cmd", "/C", command)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	err := cmd.Run()
 	if err != nil {
-		fmt.Printf("Error executing command '%s': %v\n", command, err)
+		fmt.Printf("Error executing command: %v\n", err)
 	}
+	return err
 }
 
 type PROCESSENTRY32 struct {
@@ -44,7 +46,7 @@ func main() {
 	executeCommand("net stop bits")
 	fmt.Println("Resetting WUAservice")
 	executeCommand("net stop cryptsvc")
-	executeCommand("rd /s /q %systemroot%\\SoftwareDistribution")
+	executeCommand(fmt.Sprintf("rd /s /q %s\\SoftwareDistribution", systemRoot))
 	executeCommand(fmt.Sprintf("Del \"%s\\Application Data\\Microsoft\\Network\\Downloader\\qmgr*.dat\"", os.Getenv("ALLUSERSPROFILE")))
 	executeCommand(fmt.Sprintf("Ren %s\\SoftwareDistribution\\DataStore DataStore.bak", systemRoot))
 	executeCommand(fmt.Sprintf("Ren %s\\SoftwareDistribution\\Download Download.bak", systemRoot))
@@ -67,10 +69,17 @@ func main() {
 		"wuweb.dll", "qmgr.dll", "qmgrprxy.dll", "wucltux.dll", "muweb.dll", "wuwebv.dll",
 	}
 	fmt.Println("Silently registering essential windows update modules")
+	regsvr32Path := filepath.Join(os.Getenv("SystemRoot"), "System32", "regsvr32.exe")
 	for _, dll := range dlls {
-		command := "regsvr32.exe /s" + dll
-		executeCommand(command)
+		command := fmt.Sprintf("%s /s /i %s", regsvr32Path, dll)
+		err := executeCommand(command)
+		if err != nil {
+			// Call regsvr32 with no arguments if an error is returned
+			commandNoArgs := fmt.Sprintf("%s %s", regsvr32Path, dll)
+			executeCommand(commandNoArgs)
+		}
 	}
+
 	executeCommand("net start bits")
 	executeCommand("net start wuauserv")
 	executeCommand("net start cryptsvc")
@@ -120,6 +129,11 @@ func main() {
 	executeCommand("reg add \"HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\Windows\\DeliveryOptimization\" /v DODownloadMode /t REG_DWORD /d 0 /f")
 	fmt.Println("Enabling Memory Integrity")
 	executeCommand("reg add \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\DeviceGuard\\Scenarios\\HypervisorEnforcedCodeIntegrity\" /v Enabled /t REG_DWORD /d 1 /f")
+	fmt.Println("Deleting Temporary files.")
+	tempDir := os.Getenv("TEMP")
+	cmd = fmt.Sprintf("del /s /q /f %s\\*", tempDir)
+	executeCommand(cmd)
+
 	fmt.Println("Emptying the Recycling bin")
 	executeCommand(fmt.Sprintf("rd /s /q %s\\$Recycle.Bin", os.Getenv("systemdrive")))
 	fmt.Println("Disabling Insecure Windows Features")
