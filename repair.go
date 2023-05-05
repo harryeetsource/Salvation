@@ -1,164 +1,321 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
+	"strings"
+
+	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/app"
+	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/widget"
 )
 
-func executeCommand(shell, command string) error {
-	var cmd *exec.Cmd
-	if shell == "powershell" {
-		cmd = exec.Command("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command)
-	} else {
-		cmd = exec.Command("cmd", "/C", command)
-	}
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	err := cmd.Run()
+func execCommand(cmd string, args ...string) (string, error) {
+	var out bytes.Buffer
+	command := exec.Command(cmd, args...)
+	command.Stdout = &out
+	err := command.Run()
 	if err != nil {
-		fmt.Printf("Error executing command: %v\n", err)
+		return "", err
 	}
-	return err
+	return out.String(), nil
 }
 
-type PROCESSENTRY32 struct {
-	Size              uint32
-	Usage             uint32
-	ProcessID         uint32
-	DefaultHeapID     uintptr
-	ModuleID          uint32
-	CntThreads        uint32
-	ParentProcessID   uint32
-	PriorityClassBase int32
-	Flags             uint32
-	ExeFile           [260]uint16
+type DriverPackage struct {
+	PublishedName string
+	DriverName    string
 }
 
-func main() {
-	fmt.Println("Performing full cleanup and system file check.")
-	executeCommand("cmd", "dism /online /cleanup-image /startcomponentcleanup")
-	executeCommand("cmd", "dism /online /cleanup-image /restorehealth")
-	executeCommand("cmd", "sfc /scannow")
+func (d DriverPackage) String() string {
+	return fmt.Sprintf("Published name: %s, Driver name: %s", d.PublishedName, d.DriverName)
+}
 
-	fmt.Println("Deleting Prefetch files.")
-	systemRoot := os.Getenv("SystemRoot")
-	cmd := fmt.Sprintf("del /s /q /f %s\\Prefetch\\*", systemRoot)
-	executeCommand("cmd", cmd)
-	fmt.Println("Cleaning up Windows Update cache.")
-	executeCommand("cmd", "net stop wuauserv")
-	executeCommand("cmd", "net stop bits")
-	fmt.Println("Resetting WUAservice")
-	executeCommand("cmd", "net stop cryptsvc")
-	executeCommand("cmd", fmt.Sprintf("rd /s /q %s\\SoftwareDistribution", systemRoot))
-	executeCommand("cmd", fmt.Sprintf("Del \"%s\\Application Data\\Microsoft\\Network\\Downloader\\qmgr*.dat\"", os.Getenv("ALLUSERSPROFILE")))
-	executeCommand("cmd", fmt.Sprintf("Ren %s\\SoftwareDistribution\\DataStore DataStore.bak", systemRoot))
-	executeCommand("cmd", fmt.Sprintf("Ren %s\\SoftwareDistribution\\Download Download.bak", systemRoot))
-	executeCommand("cmd", fmt.Sprintf("Ren %s\\System32\\catroot2 catroot2.bak", systemRoot))
-
-	executeCommand("cmd", "sc.exe sdset bits D:(A;CI;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCLCSWLOCRRC;;;IU)(A;;CCLCSWLOCRRC;;;SU)")
-	executeCommand("cmd", "sc.exe sdset wuauserv D:(A;;CCLCSWRPLORC;;;AU)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;SY))")
-	// Change the working directory
-	windir := os.Getenv("windir")
-	err := os.Chdir(fmt.Sprintf("%s\\system32", windir))
+func getDriverPackages() ([]DriverPackage, error) {
+	driverPackages := []DriverPackage{}
+	output, err := execCommand("pnputil", "/e")
 	if err != nil {
-		fmt.Println("Error changing the working directory:", err)
+		return nil, err
 	}
+	input := strings.NewReader(output)
+	scanner := bufio.NewScanner(input)
+	var currentDriverPackage DriverPackage
 
-	dlls := []string{
-		"atl.dll", "urlmon.dll", "mshtml.dll", "shdocvw.dll", "browseui.dll", "jscript.dll",
-		"vbscript.dll", "scrrun.dll", "msxml3.dll", "msxml6.dll", "actxprxy.dll",
-		"softpub.dll", "wintrust.dll", "dssenh.dll", "rsaenh.dll",
-		"cryptdlg.dll", "oleaut32.dll", "ole32.dll", "shell32.dll",
-		"wuapi.dll", "wuaueng.dll", "wups.dll", "wups2.dll",
-		"qmgr.dll", "qmgrprxy.dll",
-	}
-	fmt.Println("Silently registering essential windows update modules")
-	regsvr32Path := filepath.Join(os.Getenv("SystemRoot"), "System32", "regsvr32.exe")
-	for _, dll := range dlls {
-		command := fmt.Sprintf("%s /s /i %s", regsvr32Path, dll)
-		err := executeCommand("cmd", command)
-		if err != nil {
-			// Call regsvr32 with no arguments if an error is returned
-			commandNoArgs := fmt.Sprintf("cmd", "%s /s %s", regsvr32Path, dll)
-			executeCommand("cmd", commandNoArgs)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.Contains(line, "Published name :") {
+			currentDriverPackage.PublishedName = strings.TrimSpace(strings.Split(line, ":")[1])
+		} else if strings.Contains(line, "Driver package provider :") {
+			currentDriverPackage.DriverName = strings.TrimSpace(strings.Split(line, ":")[1])
+			driverPackages = append(driverPackages, currentDriverPackage)
 		}
 	}
 
-	executeCommand("cmd", "net start bits")
-	executeCommand("cmd", "net start wuauserv")
-	executeCommand("cmd", "net start cryptsvc")
-	executeCommand("cmd", "net stop fontcache")
-	executeCommand("cmd", fmt.Sprintf("del /f /s /q /a %s\\ServiceProfiles\\LocalService\\AppData\\Local\\FontCache\\*", systemRoot))
-	executeCommand("cmd", fmt.Sprintf("del /f /s /q /a %s\\ServiceProfiles\\LocalService\\AppData\\Local\\FontCache-System\\*", systemRoot))
-	executeCommand("cmd", "net start fontcache")
-	executeCommand("cmd", "cleanmgr /sagerun:1")
-	fmt.Println("Disabling Insecure Windows Features")
-	executeCommand("cmd", "dism /online /disable-feature /featurename:WindowsMediaPlayer")
-	fmt.Println("Disabling SMBv1")
-	executeCommand("cmd", "dism /online /disable-feature /featurename:SMB1Protocol")
-	fmt.Println("Disabling autorun for all drives")
-	executeCommand("cmd", "reg add \"HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer\" /v NoDriveTypeAutoRun /t REG_DWORD /d 255 /f")
+	return driverPackages, nil
+}
+
+func getWMICApps() ([]string, error) {
+	wmicApps := []string{}
+	output, err := execCommand("wmic", "product", "get", "IdentifyingNumber,Name")
+	if err != nil {
+		return nil, err
+	}
+	input := strings.NewReader(output)
+	scanner := bufio.NewScanner(input)
+	scanner.Scan() // Skip the header line
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line != "" {
+			delimiter := strings.Index(line, "  ")
+			if delimiter != -1 {
+				appId := line[:delimiter]
+				appName := strings.TrimSpace(line[delimiter+2:])
+				wmicApps = append(wmicApps, appId+","+appName)
+			}
+		}
+	}
+
+	return wmicApps, nil
+}
+
+func getWindowsStoreApps() ([]string, error) {
+	storeApps := []string{}
+	output, err := execCommand("powershell", "-command", "Get-AppxPackage -AllUsers | Format-Table Name,PackageFullName -AutoSize")
+	if err != nil {
+		return nil, err
+	}
+	input := strings.NewReader(output)
+	scanner := bufio.NewScanner(input)
+	scanner.Scan() // Skip the header line
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line != "" {
+			delimiter := strings.Index(line, "  ")
+			if delimiter != -1 {
+				appName := line[:delimiter]
+				appFullName := strings.TrimSpace(line[delimiter+2:])
+				storeApps = append(storeApps, appName+","+appFullName)
+			}
+		}
+	}
+
+	return storeApps, nil
+}
+func performSystemCleanup() {
+	fmt.Println("Performing full cleanup and system file check.")
+	execCommand("dism", "/online", "/cleanup-image", "/startcomponentcleanup")
+	execCommand("dism", "/online", "/cleanup-image", "/restorehealth")
+	execCommand("sfc", "/scannow")
+
+	fmt.Println("Deleting Prefetch files.")
+	systemRoot := os.ExpandEnv("%systemroot%")
+	execCommand("cmd", "/c", "del /s /q /f", systemRoot+"\\Prefetch\\*")
+
+	fmt.Println("Cleaning up Windows Update cache.")
+	execCommand("net", "stop", "wuauserv")
+	execCommand("net", "stop", "bits")
+	execCommand("cmd", "/c", "rd /s /q", systemRoot+"\\SoftwareDistribution")
+	execCommand("net", "start", "wuauserv")
+	execCommand("net", "start", "bits")
+	fmt.Println("Performing disk cleanup.")
+	execCommand("cleanmgr", "/sagerun:1")
+	fmt.Println("Removing temporary files.")
+	temp := os.ExpandEnv("%temp%")
+	execCommand("del", "/s /q", temp+"\\*")
+	execCommand("del", "/s /q", systemRoot+"\\temp\\*")
+	fmt.Println("Cleaning up font cache.")
+	execCommand("net", "stop", "fontcache")
+	execCommand("del", "/f /s /q /a", systemRoot+"\\ServiceProfiles\\LocalService\\AppData\\Local\\FontCache\\*")
+	execCommand("del", "/f /s /q /a", systemRoot+"\\ServiceProfiles\\LocalService\\AppData\\Local\\FontCache-System\\*")
+	execCommand("net", "start", "fontcache")
+	//disable insecure windows features
+	fmt.Println("Disabling insecure windows features.")
+	execCommand("dism", "/online", "/disable-feature", "/featurename:WindowsMediaPlayer")
+	fmt.Println("Disabling Windows Media Player")
+	execCommand("dism", "/online", "/disable-feature", "/featurename:WindowsMediaPlayer")
+
+	fmt.Println("Disabling SMBV1")
+	execCommand("dism", "/online", "/disable-feature", "/featurename:SMB1Protocol")
+
+	fmt.Println("Disabling RDP")
+	execCommand("reg", "add", "HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server", "/v", "fDenyTSConnections", "/t", "REG_DWORD", "/d", "1", "/f")
+
+	fmt.Println("Disabling Remote Assistance")
+	execCommand("reg", "add", "HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Remote Assistance", "/v", "fAllowToGetHelp", "/t", "REG_DWORD", "/d", "0", "/f")
+
+	fmt.Println("Disable Autorun for all drives")
+	execCommand("reg", "add", "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer", "/v", "NoDriveTypeAutoRun", "/t", "REG_DWORD", "/d", "255", "/f")
+
 	fmt.Println("Disabling LLMNR")
-	executeCommand("cmd", "reg add \"HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows NT\\DNSClient\" /v EnableMulticast /t REG_DWORD /d 0 /f")
-	fmt.Println("Enabling UAC")
-	executeCommand("cmd", "reg add \"HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System\" /v EnableLUA /t REG_DWORD /d 1 /f")
-	fmt.Println("UAC step 2")
-	executeCommand("cmd", "reg add \"HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System\" /v ConsentPromptBehaviorAdmin /t REG_DWORD /d 2 /f")
-	fmt.Println("Deleting windows logs older than 7 days")
-	executeCommand("cmd", fmt.Sprintf("cmd", "forfiles /p \"%s\\Logs\" /s /m *.log /d -7 /c \"cmd del @path\"", systemRoot))
-	fmt.Println("Enabling Windows Credential Guard")
-	executeCommand("cmd", "reg add \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\LSA\" /v LsaCfgFlags /t REG_DWORD /d 1 /f")
-	executeCommand("cmd", "bcdedit /set {0cb3b571-2f2e-4343-a879-d86a476d7215} loadoptions DISABLE-LSA-ISO,DISABLE-VSM")
-	executeCommand("cmd", "bcdedit /set {0cb3b571-2f2e-4343-a879-d86a476d7215} device path '\\EFI\\Microsoft\\Boot\\SecConfig.efi'")
-	fmt.Println("Enabling Exploit Protection")
-	executeCommand("powershell", "Set-ProcessMitigation -System -Enable DEP,SEHOP")
-	fmt.Println("Enabling DEP")
-	executeCommand("cmd", "bcdedit /set nx AlwaysOn")
+	execCommand("reg", "add", "HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\Windows NT\\DNSClient", "/v", "EnableMulticast", "/t", "REG_DWORD", "/d", "0", "/f")
+
+	fmt.Println("Deleting oldest shadowcopy")
+	execCommand("vssadmin", "delete", "shadows", "/for=C:", "/oldest")
+
+	fmt.Println("Enable UAC")
+	execCommand("reg", "add", "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System", "/v", "EnableLUA", "/t", "REG_DWORD", "/d", "1", "/f")
+	execCommand("reg", "add", "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System", "/v", "ConsentPromptBehaviorAdmin", "/t", "REG_DWORD", "/d", "2", "/f")
+
+	fmt.Println("Deleting log files older than 7 days")
+	execCommand("forfiles", "/p", "C:\\Windows\\Logs", "/s", "/m", "*.log", "/d", "-7", "/c", "cmd /c del @path")
+	fmt.Println("Enabling Windows Defender Credential Guard")
+	fmt.Println("Enabling Credential Guard.")
+	execCommand("reg", "add", "HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\LSA", "/v", "LsaCfgFlags", "/t", "REG_DWORD", "/d", "1", "/f")
+	execCommand("bcdedit", "/set", "{0cb3b571-2f2e-4343-a879-d86a476d7215}", "loadoptions", "DISABLE-LSA-ISO,DISABLE-VSM")
+	execCommand("bcdedit", "/set", "{0cb3b571-2f2e-4343-a879-d86a476d7215}", "device", "path", "\\EFI\\Microsoft\\Boot\\SecConfig.efi")
+
+	fmt.Println("Enabling Exploit Protection settings")
+	execCommand("powershell", "-command", "Set-ProcessMitigation -System -Enable DEP,SEHOP")
+	fmt.Println("Enabling Data Execution Prevention (DEP)")
+	execCommand("bcdedit", "/set", "nx", "AlwaysOn")
 	fmt.Println("Enabling Secure Boot")
-	executeCommand("cmd", "bcdedit /set {default} bootmenupolicy Standard")
-	fmt.Println("Secure Boot Step 2")
-	executeCommand("powershell", "Confirm-SecureBootUEFI")
+	execCommand("bcdedit", "/set", "{default}", "bootmenupolicy", "Standard")
+	fmt.Println("Enabling secure boot-step 2.")
+	execCommand("powershell", "-command", "Confirm-SecureBootUEFI")
+
 	fmt.Println("Disabling Microsoft Office macros.")
-	executeCommand("cmd", "reg add \"HKCU\\Software\\Microsoft\\Office\\16.0\\Excel\\Security\" /v VBAWarnings /t REG_DWORD /d 4 /f")
-	executeCommand("cmd", "reg add \"HKCU\\Software\\Microsoft\\Office\\16.0\\PowerPoint\\Security\" /v VBAWarnings /t REG_DWORD /d 4 /f")
-	executeCommand("cmd", "reg add \"HKCU\\Software\\Microsoft\\Office\\16.0\\Word\\Security\" /v VBAWarnings /t REG_DWORD /d 4 /f")
-	fmt.Println("Enabling ASLR")
-	executeCommand("cmd", "reg add \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Memory Management\" /v MoveImages /t REG_DWORD /d 1 /f")
-	fmt.Println("Enabling Defender Real-Time Protection VIA registry")
-	executeCommand("cmd", "reg add \"HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows Defender\" /v DisableAntiSpyware /t REG_DWORD /d 0 /f")
-	executeCommand("cmd", "reg add \"HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection\" /v DisableBehaviorMonitoring /t REG_DWORD /d 0 /f")
-	executeCommand("cmd", "reg add \"HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection\" /v DisableOnAccessProtection /t REG_DWORD /d 0 /f")
-	executeCommand("cmd", "reg add \"HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection\" /v DisableScanOnRealtimeEnable /t REG_DWORD /d 0 /f")
+	execCommand("reg", "add", "HKEY_CURRENT_USER\\Software\\Microsoft\\Office\\16.0\\Excel\\Security", "/v", "VBAWarnings", "/t", "REG_DWORD", "/d", "4", "/f")
+	execCommand("reg", "add", "HKEY_CURRENT_USER\\Software\\Microsoft\\Office\\16.0\\PowerPoint\\Security", "/v", "VBAWarnings", "/t", "REG_DWORD", "/d", "4", "/f")
+	execCommand("reg", "add", "HKEY_CURRENT_USER\\Software\\Microsoft\\Office\\16.0\\Word\\Security", "/v", "VBAWarnings", "/t", "REG_DWORD", "/d", "4", "/f")
+	fmt.Println("Enabling Address Space Layout Randomization.")
+	execCommand("reg", "add", "HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Memory Management", "/v", "MoveImages", "/t", "REG_DWORD", "/d", "1", "/f")
+	fmt.Println("Enabling Windows Defender Real-Time protection VIA registry.")
+	execCommand("reg", "add", "HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\Windows Defender", "/v", "DisableAntiSpyware", "/t", "REG_DWORD", "/d", "0", "/f")
+	execCommand("reg", "add", "HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection", "/v", "DisableBehaviorMonitoring", "/t", "REG_DWORD", "/d", "0", "/f")
+	execCommand("reg", "add", "HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection", "/v", "DisableOnAccessProtection", "/t", "REG_DWORD", "/d", "0", "/f")
+	execCommand("reg", "add", "HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection", "/v", "DisableScanOnRealtimeEnable", "/t", "REG_DWORD", "/d", "0", "/f")
+	fmt.Println("Enabling DNS-over-HTTPS (DoH) in Windows 11.")
+	execCommand("reg", "add", "HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Services\\Dnscache\\Parameters", "/v", "EnableAutoDoh", "/t", "REG_DWORD", "/d", "2", "/f")
+	fmt.Println("Checking for and installing Windows updates.")
+	execCommand("powershell", "-ExecutionPolicy", "Bypass", "-command", "Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force")
+	execCommand("powershell", "-ExecutionPolicy", "Bypass", "-command", "Install-Module -Name PowerShellGet -Scope CurrentUser -Force -AllowClobber")
+	execCommand("powershell", "-ExecutionPolicy", "Bypass", "-command", "Register-PackageSource -Trusted -ProviderName 'PowerShellGet' -Name 'PSGallery' -Location 'https://www.powershellgallery.com/api/v2'")
+	execCommand("powershell", "-ExecutionPolicy", "Bypass", "-command", "Install-Package -Name PSWindowsUpdate -ProviderName PowerShellGet -Force")
+	execCommand("powershell", "-ExecutionPolicy", "Bypass", "-command", "Import-Module PowerShellGet; Import-Module PSWindowsUpdate; Install-Module PSWindowsUpdate -Force; Get-WindowsUpdate -Install")
+	fmt.Println("Restricting access to the Local System Authority.")
+	execCommand("reg", "add", "HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Lsa", "/v", "RestrictAnonymous", "/t", "REG_DWORD", "/d", "1", "/f")
+
+	// Disable Windows Delivery Optimization
 	fmt.Println("Disabling Windows Delivery Optimization")
-	executeCommand("cmd", "reg add \"HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows\\DeliveryOptimization\" /v DODownloadMode /t REG_DWORD /d 0 /f")
+	execCommand("reg", "add", "HKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\Windows\\DeliveryOptimization", "/v", "DODownloadMode", "/t", "REG_DWORD", "/d", "0", "/f")
 	fmt.Println("Enabling Memory Integrity")
-	executeCommand("cmd", "reg add \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\DeviceGuard\\Scenarios\\HypervisorEnforcedCodeIntegrity\" /v Enabled /t REG_DWORD /d 1 /f")
-	fmt.Println("Deleting Temporary files.")
-	tempDir := os.Getenv("TEMP")
-	cmd = fmt.Sprintf("del /s /q /f %s\\*", tempDir)
-	executeCommand("cmd", cmd)
+	execCommand("reg", "add", "HKLM\\SYSTEM\\CurrentControlSet\\Control\\DeviceGuard\\Scenarios\\HypervisorEnforcedCodeIntegrity\\", "/v", "Enabled", "/t", "REG_DWORD", "/d", "1", "/f")
+	fmt.Println("Emptying Recycling Bin")
+	bin := os.ExpandEnv("%systemdrive")
+	execCommand("rd", "/s /q", bin+"\\$Recycle.Bin")
+	fmt.Println("Enabling Kernel Mode Hardware Enforced Stack Protection.")
+	execCommand("bcdedit", "/set", "kstackguardpolicy", "enable")
+	fmt.Println("Enabling Windows Defender and Security Center.")
 
-	fmt.Println("Emptying the Recycling bin")
-	executeCommand("cmd", fmt.Sprintf("rd /s /q %s\\$Recycle.Bin", os.Getenv("systemdrive")))
-	fmt.Println("Disabling Insecure Windows Features")
-	executeCommand("powershell", "Set-MpPreference -DisableRealtimeMonitoring 0")
-	fmt.Println("Enabling Windows Security Center Service")
-	executeCommand("cmd", "sc config wscsvc start= auto")
-	executeCommand("cmd", "sc start wscsvc")
-	fmt.Println("Updating Windows Defender Signatures")
-	executeCommand("powershell", "Update-MpSignature")
-	fmt.Println("Checking for and installing Windows updates")
-	executeCommand("powershell", "Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force")
-	executeCommand("powershell", "Install-Module -Name PowerShellGet -Scope CurrentUser -Force -AllowClobber")
-	executeCommand("powershell", "Register-PackageSource -Trusted -ProviderName 'PowerShellGet' -Name 'PSGallery' -Location 'https://www.powershellgallery.com/api/v2'")
-	executeCommand("powershell", "Install-Package -Name PSWindowsUpdate -ProviderName PowerShellGet -Force")
-	executeCommand("powershell", "Import-Module PowerShellGet")
-	executeCommand("powershell", "Import-Module PSWindowsUpdate")
-	executeCommand("powershell", "Install-Module PSWindowsUpdate -Force")
-	executeCommand("powershell", "Get-WindowsUpdate -Install")
+	// Enabling Windows Defender Real-time protection
+	execCommand("powershell.exe", "Set-MpPreference", "-DisableRealtimeMonitoring", "0")
 
-	fmt.Println("Restricting anonymous LSA access")
-	executeCommand("cmd", "reg add \"HKLM\\SYSTEM\\CurrentControlSet\\Control\\Lsa\" /v RestrictAnonymous /t REG_DWORD /d 1 /f")
+	// Enabling Windows Security Center
+	fmt.Println("Enabling Windows Security Center service")
+	execCommand("sc", "config", "wscsvc", "start=", "auto")
+	execCommand("sc", "start", "wscsvc")
+
+	// Updating Windows Defender signatures
+	fmt.Println("Updating Windows Defender signatures.")
+	execCommand("powershell.exe", "Update-MpSignature")
+}
+
+func main() {
+	myApp := app.New()
+	myWindow := myApp.NewWindow("System Cleanup")
+
+	storeApps, _ := getWindowsStoreApps()
+	driverPackages, _ := getDriverPackages()
+	wmicApps, _ := getWMICApps()
+
+	// List of Windows Store Apps
+	storeAppList := widget.NewList(
+		func() int {
+			return len(storeApps)
+		},
+		func() fyne.CanvasObject {
+			return widget.NewLabel("Template")
+		},
+		func(index widget.ListItemID, item fyne.CanvasObject) {
+			item.(*widget.Label).SetText(storeApps[index])
+		},
+	)
+	storeAppList.OnSelected = func(id widget.ListItemID) {
+		appFullName := storeApps[id]
+		command := "powershell -command \"Get-AppxPackage -AllUsers -Name " + appFullName + " | Remove-AppxPackage\""
+		fmt.Println("Uninstalling Windows Store app: " + appFullName)
+		exec.Command("cmd", "/C", command).Run()
+		storeApps, _ = getWindowsStoreApps()
+		storeAppList.Refresh()
+	}
+
+	// List of Driver Packages
+
+	driverPackageList := widget.NewList(
+		func() int {
+			return len(driverPackages)
+		},
+		func() fyne.CanvasObject {
+			return widget.NewLabel("Template")
+		},
+		func(index widget.ListItemID, item fyne.CanvasObject) {
+			item.(*widget.Label).SetText(driverPackages[index].PublishedName)
+		},
+	)
+	driverPackageList.OnSelected = func(id widget.ListItemID) {
+		driverPackageName := driverPackages[id].PublishedName
+		command := "pnputil /d \"" + driverPackageName + "\""
+		fmt.Println("Deleting driver package: " + driverPackageName)
+		exec.Command("cmd", "/C", command).Run()
+		driverPackages, _ = getDriverPackages()
+		driverPackageList.Refresh()
+	}
+
+	// List of WMIC Apps
+	wmicAppList := widget.NewList(
+		func() int {
+			return len(wmicApps)
+		},
+		func() fyne.CanvasObject {
+			return widget.NewLabel("Template")
+		},
+		func(index widget.ListItemID, item fyne.CanvasObject) {
+			item.(*widget.Label).SetText(wmicApps[index])
+		},
+	)
+	wmicAppList.OnSelected = func(id widget.ListItemID) {
+		appId := wmicApps[id]
+		command := "wmic product where \"IdentifyingNumber='" + appId + "'\" call uninstall /nointeractive"
+		fmt.Println("Uninstalling WMIC app: " + appId)
+		exec.Command("cmd", "/C", command).Run()
+		wmicApps, _ = getWMICApps()
+		wmicAppList.Refresh()
+	}
+
+	// System cleanup button
+	cleanupButton := widget.NewButton("Perform System Cleanup", func() {
+		fmt.Println("Performing system cleanup...")
+		// Add your cleanup commands here
+	})
+
+	cleanupTab := container.NewVBox(
+		cleanupButton,
+		widget.NewLabel("Click the button to perform system cleanup."),
+	)
+
+	tabs := container.NewAppTabs(
+		container.NewTabItem("Windows Store Apps", storeAppList),
+		container.NewTabItem("Driver Packages", driverPackageList),
+		container.NewTabItem("WMIC Apps", wmicAppList),
+		container.NewTabItem("System Cleanup", cleanupTab),
+	)
+
+	myWindow.SetContent(tabs)
+	myWindow.Resize(fyne.NewSize(500, 400))
+	myWindow.ShowAndRun()
 }
